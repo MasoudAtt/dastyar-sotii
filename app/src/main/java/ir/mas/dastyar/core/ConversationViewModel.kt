@@ -62,10 +62,32 @@ class ConversationViewModel(
 
     private var smsController: SmsNavigationController? = null
 
-    /** وضعیت موتورهای صدا را می‌خواند و در گزارش می‌نویسد. */
+    /**
+     * null یعنی هنوز در حال بررسی موتورهای صداست.
+     * false یعنی روی این گوشی هیچ موتور صدای فارسی وجود ندارد — در این حالت
+     * رابط کاربری باید هشدار بدهد، وگرنه اپ بی‌صدا و ظاهراً خراب به‌نظر می‌رسد.
+     */
+    private val _ttsPersian = MutableStateFlow<Boolean?>(null)
+    val ttsPersian: StateFlow<Boolean?> = _ttsPersian.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repeat(20) {
+                if (tts.isAvailable()) {
+                    _ttsPersian.value = tts.supportsPersian()
+                    logEvent(tts.statusDescription())
+                    return@launch
+                }
+                delay(300)
+            }
+            _ttsPersian.value = tts.supportsPersian()
+            logEvent(tts.statusDescription())
+        }
+    }
+
+    /** وضعیت موتورها را می‌خواند و در گزارش می‌نویسد. */
     fun refreshDiagnostics() {
         logEvent(stt.statusDescription())
-        logEvent(tts.statusDescription())
         logEvent("مغز تشخیص دستور: ${llm.providerName}")
     }
 
@@ -113,7 +135,10 @@ class ConversationViewModel(
         val message = when (error) {
             SttError.NO_PERMISSION -> "دسترسی میکروفون داده نشده است."
             SttError.NO_SPEECH_DETECTED -> "صدایی شنیده نشد. دوباره امتحان کنید."
-            SttError.NETWORK_OR_SERVICE_UNAVAILABLE -> "سرویس تشخیص گفتار در دسترس نیست."
+            SttError.NETWORK_OR_SERVICE_UNAVAILABLE ->
+                "سرویس تشخیص گفتار در دسترس نیست. اینترنت گوشی را بررسی کنید."
+            SttError.RECOGNIZER_BUSY -> "موتور تشخیص گفتار آماده نبود. دوباره ضربه بزنید."
+            SttError.AUDIO_PROBLEM -> "مشکلی در ضبط صدا پیش آمد. دوباره امتحان کنید."
             SttError.UNKNOWN -> "مشکلی در شنیدن صدا پیش آمد."
         }
         logEvent("خطای شنیدن: $error")
@@ -148,7 +173,16 @@ class ConversationViewModel(
 
     private fun handleFreshIntent(text: String) {
         viewModelScope.launch {
-            when (val intent = llm.classify(text)) {
+            val intent = llm.classify(text)
+            logEvent(
+                "تشخیص: " + when (intent) {
+                    is ParsedIntent.CallContact -> "تماس با «${intent.contactName}»"
+                    is ParsedIntent.ReadSms -> "خواندن پیامک‌ها"
+                    is ParsedIntent.Chat -> "گفتگوی ساده"
+                    is ParsedIntent.Invalid -> "نامعتبر (${intent.reason})"
+                }
+            )
+            when (intent) {
                 is ParsedIntent.CallContact -> startCallFlow(intent.contactName)
                 is ParsedIntent.ReadSms -> startReadSmsFlow()
                 is ParsedIntent.Chat -> {
@@ -171,7 +205,15 @@ class ConversationViewModel(
     // -------------------- CALL_CONTACT --------------------
 
     private fun startCallFlow(contactName: String) {
-        when (val result = contactsResolver.findByName(contactName)) {
+        val result = contactsResolver.findByName(contactName)
+        logEvent(
+            "جست‌وجوی مخاطب «$contactName»: " + when (result) {
+                is ContactLookupResult.SingleMatch -> "۱ نتیجه"
+                is ContactLookupResult.MultipleMatches -> "${result.contacts.size} نتیجه"
+                is ContactLookupResult.NoMatch -> "هیچ نتیجه‌ای (کل مخاطبین: ${contactsResolver.countAll()})"
+            }
+        )
+        when (result) {
             is ContactLookupResult.SingleMatch -> {
                 val contact = result.contact
                 val question = "${contact.displayName} را پیدا کردم. می‌خواهید با او تماس بگیرم؟"
@@ -263,6 +305,7 @@ class ConversationViewModel(
 
     private fun startReadSmsFlow() {
         val messages = smsReader.loadRecentMessages()
+        logEvent("پیامک‌های خوانده‌شده از صندوق ورودی: ${messages.size}")
         val controller = SmsNavigationController(messages)
         smsController = controller
 
@@ -327,8 +370,19 @@ class ConversationViewModel(
                 }
             }
             SmsNavigationCommand.UNKNOWN -> {
-                speak("برای پیمایش پیام‌ها بگویید «بعدی»، «قبلی»، «دوباره بخون» یا «متوقف شو».") {
-                    _state.value = lastMeaningfulState
+                // کاربر نباید داخل حالت خواندن پیامک گیر بیفتد: اگر جمله‌اش
+                // در واقع یک دستور تماس است، همان را اجرا می‌کنیم.
+                viewModelScope.launch {
+                    val intent = llm.classify(text)
+                    if (intent is ParsedIntent.CallContact) {
+                        logEvent("در حین خواندن پیامک، دستور تماس تشخیص داده شد.")
+                        smsController = null
+                        startCallFlow(intent.contactName)
+                    } else {
+                        speak("برای پیمایش پیام‌ها بگویید «بعدی»، «قبلی»، «دوباره بخوان» یا «متوقف شو».") {
+                            _state.value = lastMeaningfulState
+                        }
+                    }
                 }
             }
         }

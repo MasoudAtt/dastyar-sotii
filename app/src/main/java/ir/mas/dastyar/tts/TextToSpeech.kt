@@ -1,6 +1,7 @@
 package ir.mas.dastyar.tts
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,14 +13,18 @@ import java.util.UUID
 /**
  * لایه Abstraction روی موتور تبدیل متن به گفتار.
  *
- * پیاده‌سازی MVP فعلی ([AndroidSystemTtsProvider]) از موتور TTS سیستم اندروید
- * استفاده می‌کند. طبق سند امکان‌سنجی، پشتیبانی فارسی موتورهای TTS سیستمی
- * ناسازگار/ناکامل گزارش شده؛ قدم بعدی جایگزینی با یک موتور آفلاین
- * (با صدای فارسی) به‌علاوه eSpeak-NG به‌عنوان fallback تضمینی است.
+ * یافته مهم از تست روی گوشی واقعی: موتور پیش‌فرض TTS اندروید (Google) اصلاً
+ * صدای فارسی ندارد. چون تمام بازخورد این اپ صوتی است، این یعنی اپ عملاً
+ * لال است. بنابراین این لایه دیگر فقط به موتور پیش‌فرض تکیه نمی‌کند: همه
+ * موتورهای نصب‌شده روی گوشی را امتحان می‌کند و اولین موتوری را که فارسی
+ * دارد انتخاب می‌کند.
  */
 interface TextToSpeechProvider {
 
     fun isAvailable(): Boolean
+
+    /** آیا موتور انتخاب‌شده واقعاً می‌تواند فارسی حرف بزند؟ */
+    fun supportsPersian(): Boolean
 
     /** توضیح کوتاه و قابل‌نمایش از وضعیت موتور، برای عیب‌یابی روی گوشی واقعی. */
     fun statusDescription(): String
@@ -33,37 +38,124 @@ interface TextToSpeechProvider {
 
 class AndroidSystemTtsProvider(context: Context) : TextToSpeechProvider {
 
-    private var ready = false
-    private var initStatus: Int? = null
-    private var languageResult: Int? = null
+    private val appContext = context.applicationContext
 
-    private lateinit var tts: TextToSpeech
+    private var tts: TextToSpeech? = null
+    private var probeFinished = false
+    private var persianSupported = false
+    private var activeEngine: String = "نامشخص"
+    private var installedEngines: List<String> = emptyList()
+
+    /** فهرست موتورهایی که به‌ترتیب امتحان می‌شوند؛ رشته خالی یعنی «موتور پیش‌فرض». */
+    private var candidates: List<String> = emptyList()
+    private var candidateIndex = -1
+    private var fallbackAttempted = false
 
     init {
-        tts = TextToSpeech(context.applicationContext) { status ->
-            initStatus = status
-            if (status == TextToSpeech.SUCCESS) {
-                ready = true
-                languageResult = runCatching { tts.setLanguage(Locale("fa", "IR")) }.getOrNull()
-            }
+        installedEngines = runCatching {
+            appContext.packageManager
+                .queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+                .mapNotNull { it.serviceInfo?.packageName }
+                .distinct()
+        }.getOrDefault(emptyList())
+
+        candidates = listOf("") + installedEngines
+        probeNext()
+    }
+
+    // -------------------- پیدا کردن موتوری که فارسی بلد باشد --------------------
+
+    private fun probeNext() {
+        candidateIndex++
+        if (candidateIndex >= candidates.size) {
+            finishWithoutPersian()
+            return
+        }
+        startEngine(candidates[candidateIndex])
+    }
+
+    private fun startEngine(enginePackage: String) {
+        shutdownCurrent()
+        val listener = TextToSpeech.OnInitListener { status ->
+            onEngineInit(status, enginePackage)
+        }
+        tts = runCatching {
+            if (enginePackage.isEmpty()) TextToSpeech(appContext, listener)
+            else TextToSpeech(appContext, listener, enginePackage)
+        }.getOrNull()
+
+        if (tts == null) {
+            Handler(Looper.getMainLooper()).post { probeNext() }
         }
     }
 
-    override fun isAvailable(): Boolean = ready
+    private fun onEngineInit(status: Int, enginePackage: String) {
+        if (status != TextToSpeech.SUCCESS) {
+            Handler(Looper.getMainLooper()).post { probeNext() }
+            return
+        }
+
+        val engine = tts
+        val languageResult = runCatching { engine?.setLanguage(Locale("fa", "IR")) }.getOrNull()
+        val supported = languageResult != null &&
+            languageResult != TextToSpeech.LANG_MISSING_DATA &&
+            languageResult != TextToSpeech.LANG_NOT_SUPPORTED
+
+        val engineLabel =
+            if (enginePackage.isEmpty()) (engine?.defaultEngine ?: "پیش‌فرض") else enginePackage
+
+        if (supported) {
+            persianSupported = true
+            activeEngine = engineLabel
+            probeFinished = true
+            return
+        }
+
+        if (fallbackAttempted) {
+            // این همان تلاش نهایی بازگشت به موتور پیش‌فرض بود.
+            activeEngine = engineLabel
+            persianSupported = false
+            probeFinished = true
+            return
+        }
+
+        Handler(Looper.getMainLooper()).post { probeNext() }
+    }
+
+    /**
+     * هیچ موتوری فارسی نداشت. به موتور پیش‌فرض برمی‌گردیم تا دست‌کم چیزی
+     * گفته شود (بهتر از سکوت مطلق) و وضعیت به کاربر گزارش شود.
+     */
+    private fun finishWithoutPersian() {
+        if (fallbackAttempted) {
+            probeFinished = true
+            return
+        }
+        fallbackAttempted = true
+        startEngine("")
+    }
+
+    private fun shutdownCurrent() {
+        runCatching { tts?.shutdown() }
+        tts = null
+    }
+
+    // -------------------- API --------------------
+
+    override fun isAvailable(): Boolean = probeFinished && tts != null
+
+    override fun supportsPersian(): Boolean = persianSupported
 
     override fun statusDescription(): String {
-        val initText = when (initStatus) {
-            null -> "در حال آماده‌سازی"
-            TextToSpeech.SUCCESS -> "آماده"
-            else -> "راه‌اندازی نشد (موتور TTS نصب نیست؟)"
-        }
-        val langText = when (languageResult) {
-            null -> "زبان هنوز بررسی نشده"
-            TextToSpeech.LANG_MISSING_DATA -> "داده صدای فارسی نصب نیست"
-            TextToSpeech.LANG_NOT_SUPPORTED -> "فارسی پشتیبانی نمی‌شود"
-            else -> "فارسی موجود است"
-        }
-        return "خروجی صدا (TTS): $initText — $langText"
+        val persianText =
+            if (persianSupported) "فارسی پشتیبانی می‌شود"
+            else "هیچ موتوری صدای فارسی ندارد"
+        val state = if (probeFinished) "آماده" else "در حال بررسی موتورها"
+        val engineList =
+            if (installedEngines.isEmpty()) "هیچ موتوری نصب نیست"
+            else installedEngines.joinToString("، ") { it.substringAfterLast('.') }
+        return "خروجی صدا (TTS): $state — $persianText — موتور فعال: " +
+            "${activeEngine.substringAfterLast('.')} — نصب‌شده: $engineList"
     }
 
     override fun speak(text: String, onDone: () -> Unit, onError: (() -> Unit)?) {
@@ -71,9 +163,8 @@ class AndroidSystemTtsProvider(context: Context) : TextToSpeechProvider {
     }
 
     /**
-     * راه‌اندازی موتور TTS ناهمگام است و ممکن است چند صد میلی‌ثانیه طول بکشد.
-     * اگر بلافاصله پس از باز شدن اپ چیزی گفته شود، ممکن است هنوز آماده نباشد؛
-     * به‌جای رها کردن بی‌صدا، تا حدود ۳ ثانیه منتظر می‌مانیم.
+     * راه‌اندازی و بررسی موتورها ناهمگام است و ممکن است چند ثانیه طول بکشد.
+     * به‌جای رها کردن بی‌صدا، تا حدود ۶ ثانیه منتظر می‌مانیم.
      */
     private fun speakWhenReady(
         text: String,
@@ -81,8 +172,9 @@ class AndroidSystemTtsProvider(context: Context) : TextToSpeechProvider {
         notifyError: (() -> Unit)?,
         attempt: Int
     ) {
-        if (!ready) {
-            if (attempt >= 10) {
+        val engine = tts
+        if (!probeFinished || engine == null) {
+            if (attempt >= 20) {
                 if (notifyError != null) notifyError.invoke() else notifyDone()
                 return
             }
@@ -94,7 +186,7 @@ class AndroidSystemTtsProvider(context: Context) : TextToSpeechProvider {
         }
 
         val utteranceId = UUID.randomUUID().toString()
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
 
             override fun onDone(utteranceId: String?) {
@@ -112,17 +204,17 @@ class AndroidSystemTtsProvider(context: Context) : TextToSpeechProvider {
         })
 
         val params = Bundle()
-        val result = tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+        val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
         if (result == TextToSpeech.ERROR) {
             if (notifyError != null) notifyError.invoke() else notifyDone()
         }
     }
 
     override fun stop() {
-        if (ready) tts.stop()
+        runCatching { tts?.stop() }
     }
 
     override fun destroy() {
-        if (ready) tts.shutdown()
+        shutdownCurrent()
     }
 }

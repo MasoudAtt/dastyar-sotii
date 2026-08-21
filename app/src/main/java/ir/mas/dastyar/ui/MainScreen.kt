@@ -1,5 +1,6 @@
 package ir.mas.dastyar.ui
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -32,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -60,7 +62,9 @@ fun MainScreen(viewModel: ConversationViewModel) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         val state by viewModel.state.collectAsState()
         val logLines by viewModel.log.collectAsState()
+        val ttsPersian by viewModel.ttsPersian.collectAsState()
         var typed by remember { mutableStateOf("") }
+        val context = LocalContext.current
 
         LaunchedEffect(Unit) {
             viewModel.refreshDiagnostics()
@@ -75,6 +79,33 @@ fun MainScreen(viewModel: ConversationViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(modifier = Modifier.height(24.dp))
+
+            // هشدار حیاتی: بدون موتور صدای فارسی، اپ کاملاً بی‌صدا است و
+            // کاربر نابینا هیچ بازخوردی نمی‌گیرد.
+            if (ttsPersian == false) {
+                Text(
+                    text = "روی این گوشی هیچ موتور صدای فارسی نصب نیست، برای همین اپ " +
+                        "نمی‌تواند حرف بزند. یک موتور گفتار با پشتیبانی فارسی " +
+                        "(مثل «eSpeak NG») نصب کنید و در تنظیمات، آن را به‌عنوان " +
+                        "موتور پیش‌فرض انتخاب کنید.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent("com.android.settings.TTS_SETTINGS")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    },
+                    modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
+                ) {
+                    Text(text = "باز کردن تنظیمات گفتار", style = MaterialTheme.typography.labelLarge)
+                }
+            }
 
             MicButton(
                 state = state,

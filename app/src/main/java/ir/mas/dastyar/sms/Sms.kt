@@ -2,6 +2,7 @@ package ir.mas.dastyar.sms
 
 import android.content.Context
 import android.provider.Telephony
+import ir.mas.dastyar.intent.PersianText
 import ir.mas.dastyar.intent.SmsNavigationCommand
 
 data class SmsMessage(
@@ -94,18 +95,23 @@ class SmsNavigationController(private val messages: List<SmsMessage>) {
     }
 
     companion object {
-        private val nextPatterns = listOf("بعدی", "پیام بعد", "بعد")
-        private val prevPatterns = listOf("قبلی", "پیام قبل", "قبل")
-        private val repeatPatterns = listOf("دوباره", "تکرار", "دوباره بخون")
-        private val stopPatterns = listOf("متوقف", "بس", "کافیه", "تمام", "توقف")
+
+        // هر الگو هم شکل محاوره‌ای و هم شکل رسمی را پوشش می‌دهد، چون موتور
+        // تشخیص گفتار معمولاً فارسی رسمی برمی‌گرداند («بخوان» نه «بخون»).
+        // عمداً از واژه‌های کوتاهی مثل «بس» یا «تمام» استفاده نمی‌شود، چون
+        // زیررشته کلمات دیگر می‌شوند و باعث توقف ناخواسته می‌گردند.
+        private val stopPattern = Regex("متوقف|توقف|تمومش|تموم کن|بسه|کافیه|کافی است|بی خیال|ولش کن")
+        private val repeatPattern = Regex("دوباره|تکرار|مجدد|یک بار دیگر|یکبار دیگه|باز بخوان|باز بخون")
+        private val nextPattern = Regex("بعدی|بعدش|پیام بعد|پیغام بعد|جلوتر|برو جلو")
+        private val prevPattern = Regex("قبلی|قبلش|پیام قبل|پیغام قبل|عقب تر|برو عقب|برگرد")
 
         fun parseCommand(utterance: String): SmsNavigationCommand {
-            val text = utterance.trim()
+            val text = PersianText.normalize(utterance)
             return when {
-                stopPatterns.any { text.contains(it) } -> SmsNavigationCommand.STOP
-                repeatPatterns.any { text.contains(it) } -> SmsNavigationCommand.REPEAT
-                nextPatterns.any { text.contains(it) } -> SmsNavigationCommand.NEXT
-                prevPatterns.any { text.contains(it) } -> SmsNavigationCommand.PREVIOUS
+                stopPattern.containsMatchIn(text) -> SmsNavigationCommand.STOP
+                repeatPattern.containsMatchIn(text) -> SmsNavigationCommand.REPEAT
+                nextPattern.containsMatchIn(text) -> SmsNavigationCommand.NEXT
+                prevPattern.containsMatchIn(text) -> SmsNavigationCommand.PREVIOUS
                 else -> SmsNavigationCommand.UNKNOWN
             }
         }

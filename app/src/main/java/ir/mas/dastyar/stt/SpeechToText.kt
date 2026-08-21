@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
@@ -47,6 +49,8 @@ enum class SttError {
     NO_PERMISSION,
     NO_SPEECH_DETECTED,
     NETWORK_OR_SERVICE_UNAVAILABLE,
+    RECOGNIZER_BUSY,
+    AUDIO_PROBLEM,
     UNKNOWN
 }
 
@@ -61,6 +65,7 @@ enum class SttError {
 class AndroidSystemSttProvider(private val context: Context) : SpeechToTextProvider {
 
     private var recognizer: SpeechRecognizer? = null
+    private var lastErrorCode: Int? = null
 
     override fun isAvailable(): Boolean {
         return SpeechRecognizer.isRecognitionAvailable(context)
@@ -73,10 +78,12 @@ class AndroidSystemSttProvider(private val context: Context) : SpeechToTextProvi
                 .size
         }.getOrDefault(-1)
 
+        val errorPart = lastErrorCode?.let { " — آخرین کد خطا: $it" }.orEmpty()
+
         return if (isAvailable()) {
-            "ورودی صدا (STT): سرویس تشخیص گفتار پیدا شد (تعداد: $services)"
+            "ورودی صدا (STT): سرویس تشخیص گفتار پیدا شد (تعداد: $services)$errorPart"
         } else {
-            "ورودی صدا (STT): هیچ سرویس تشخیص گفتاری روی این گوشی پیدا نشد (تعداد: $services)"
+            "ورودی صدا (STT): هیچ سرویس تشخیص گفتاری پیدا نشد (تعداد: $services)$errorPart"
         }
     }
 
@@ -119,6 +126,7 @@ class AndroidSystemSttProvider(private val context: Context) : SpeechToTextProvi
             override fun onEndOfSpeech() = Unit
 
             override fun onError(error: Int) {
+                lastErrorCode = error
                 val mapped = when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH,
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> SttError.NO_SPEECH_DETECTED
@@ -126,8 +134,15 @@ class AndroidSystemSttProvider(private val context: Context) : SpeechToTextProvi
                     SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
                     SpeechRecognizer.ERROR_SERVER -> SttError.NETWORK_OR_SERVICE_UNAVAILABLE
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> SttError.NO_PERMISSION
+                    SpeechRecognizer.ERROR_CLIENT,
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> SttError.RECOGNIZER_BUSY
+                    SpeechRecognizer.ERROR_AUDIO -> SttError.AUDIO_PROBLEM
                     else -> SttError.UNKNOWN
                 }
+                // موتور پس از خطا قابل استفاده مجدد نیست؛ آزادش می‌کنیم تا
+                // دفعه بعد یک نمونه سالم ساخته شود (علت خطای ERROR_CLIENT تکراری).
+                // آزادسازی را بیرون از خودِ callback انجام می‌دهیم تا امن باشد.
+                Handler(Looper.getMainLooper()).post { destroy() }
                 notifyError(mapped)
             }
 
