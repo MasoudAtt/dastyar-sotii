@@ -1,0 +1,106 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack source zip if present
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          zips=(*.zip)
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "No zip at repo root - assuming sources are already committed."
+          else
+            z="${zips[0]}"
+            echo "Found archive: $z"
+            rm -rf _unzip
+            mkdir _unzip
+            unzip -q -o "$z" -d _unzip
+            rm -rf _unzip/__MACOSX
+            entries=(_unzip/*)
+            if [ ${#entries[@]} -eq 1 ] && [ -d "${entries[0]}" ]; then
+              src="${entries[0]}"
+            else
+              src="_unzip"
+            fi
+            echo "Using source root: $src"
+            rm -rf "$src/.github" "$src/.git"
+            cp -a "$src"/. ./
+            rm -rf _unzip
+            rm -f "$z"
+          fi
+          echo "--- repository tree ---"
+          find . -path ./.git -prune -o -type f -print | sort
+
+      - name: Verify project layout
+        run: |
+          set -e
+          for f in settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f  --  the zip does not contain the expected Android project."
+              exit 1
+            fi
+          done
+          echo "Project layout looks correct."
+
+      - name: Commit extracted sources back to the repo
+        run: |
+          set -e
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "استخراج خودکار سورس پروژه از فایل zip"
+            git push
+          else
+            echo "Nothing to commit."
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dastyar-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release with APK
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "ساخت خودکار #${{ github.run_number }}"
+          files: app/build/outputs/apk/debug/app-debug.apk
+          body: |
+            APK ساخته‌شده به‌صورت خودکار از commit ${{ github.sha }}.
+            این نسخه debug است (بدون امضای release)؛ برای نصب روی گوشی «منابع ناشناس» را فعال کنید.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
