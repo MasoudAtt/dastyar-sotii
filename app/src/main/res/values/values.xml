@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">دستیار صوتی</string>
+
+    <string name="mic_button_idle">برای صحبت‌کردن ضربه بزنید</string>
+    <string name="mic_button_listening">در حال شنیدن… برای توقف ضربه بزنید</string>
+    <string name="mic_button_thinking">در حال پردازش</string>
+    <string name="mic_button_speaking">در حال پاسخ‌دادن</string>
+
+    <string name="mic_button_desc_idle">دکمه شروع صحبت. برای فعال‌کردن میکروفون دو بار ضربه بزنید.</string>
+    <string name="mic_button_desc_listening">در حال شنیدن صدای شما. برای توقف دو بار ضربه بزنید.</string>
+
+    <string name="status_ready">آماده گوش‌دادن هستم.</string>
+
+    <string name="perm_rationale_title">دسترسی‌های لازم</string>
+    <string name="perm_rationale_body">
+        برای کارکردن این اپ به این دسترسی‌ها نیاز است: میکروفون (برای شنیدن صدای شما)،
+        مخاطبین (برای پیدا کردن افراد)، تماس (برای برقراری تماس)، و پیامک (برای خواندن پیامک‌های شما).
+        هیچ‌کدام از این اطلاعات به بیرون از گوشی شما ارسال نمی‌شود.
+    </string>
+    <string name="perm_grant_button">اعطای دسترسی‌ها</string>
+    <string name="perm_denied_message">
+        بدون این دسترسی‌ها اپ نمی‌تواند کار کند. لطفاً از تنظیمات گوشی دسترسی‌ها را فعال کنید.
+    </string>
+
+    <string name="call_confirm_yes">بله</string>
+    <string name="call_confirm_no">خیر</string>
+
+    <string name="sms_next">بعدی</string>
+    <string name="sms_prev">قبلی</string>
+    <string name="sms_repeat">دوباره بخوان</string>
+    <string name="sms_stop">متوقف شو</string>
+
+    <style name="Theme.Dastyar" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
