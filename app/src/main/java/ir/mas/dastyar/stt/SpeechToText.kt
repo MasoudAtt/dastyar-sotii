@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
@@ -23,6 +24,9 @@ interface SpeechToTextProvider {
 
     /** آیا این پیاده‌سازی روی این گوشی/نسخه اندروید قابل استفاده است؟ */
     fun isAvailable(): Boolean
+
+    /** توضیح کوتاه و قابل‌نمایش از وضعیت موتور، برای عیب‌یابی روی گوشی واقعی. */
+    fun statusDescription(): String
 
     /**
      * شروع شنیدن. فقط یکی از callbackها برای هر بار شنیدن صدا زده می‌شود.
@@ -60,6 +64,20 @@ class AndroidSystemSttProvider(private val context: Context) : SpeechToTextProvi
 
     override fun isAvailable(): Boolean {
         return SpeechRecognizer.isRecognitionAvailable(context)
+    }
+
+    override fun statusDescription(): String {
+        val services = runCatching {
+            context.packageManager
+                .queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+                .size
+        }.getOrDefault(-1)
+
+        return if (isAvailable()) {
+            "ورودی صدا (STT): سرویس تشخیص گفتار پیدا شد (تعداد: $services)"
+        } else {
+            "ورودی صدا (STT): هیچ سرویس تشخیص گفتاری روی این گوشی پیدا نشد (تعداد: $services)"
+        }
     }
 
     override fun startListening(

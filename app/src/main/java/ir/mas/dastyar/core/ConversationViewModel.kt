@@ -17,10 +17,13 @@ import ir.mas.dastyar.sms.SmsReader
 import ir.mas.dastyar.stt.SpeechToTextProvider
 import ir.mas.dastyar.stt.SttError
 import ir.mas.dastyar.tts.TextToSpeechProvider
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * هماهنگ‌کننده اصلی مکالمه: Voice → STT → (تفسیر بر اساس state فعلی) →
@@ -45,11 +48,31 @@ class ConversationViewModel(
     private val _state = MutableStateFlow<UiState>(UiState.Idle)
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    /**
+     * گزارش رویدادهای اخیر، فقط برای عیب‌یابی روی گوشی واقعی.
+     * چون همه بازخوردهای این اپ صوتی است، اگر موتور صدا کار نکند کاربر
+     * هیچ نشانه‌ای نمی‌بیند؛ این لیست دقیقاً همان نقطه کور را پر می‌کند.
+     */
+    private val _log = MutableStateFlow<List<String>>(emptyList())
+    val log: StateFlow<List<String>> = _log.asStateFlow()
+
+    private fun logEvent(message: String) {
+        _log.value = (_log.value + message).takeLast(15)
+    }
+
     private var smsController: SmsNavigationController? = null
+
+    /** وضعیت موتورهای صدا را می‌خواند و در گزارش می‌نویسد. */
+    fun refreshDiagnostics() {
+        logEvent(stt.statusDescription())
+        logEvent(tts.statusDescription())
+        logEvent("مغز تشخیص دستور: ${llm.providerName}")
+    }
 
     // -------------------- ورودی صدا --------------------
 
     fun onMicButtonPressed() {
+        logEvent("دکمه میکروفون فشرده شد (وضعیت: ${_state.value::class.simpleName})")
         when (_state.value) {
             is UiState.Listening -> {
                 stt.stopListening()
@@ -61,10 +84,27 @@ class ConversationViewModel(
         }
     }
 
+    /** ورودی متنی (برای تست و برای گوشی‌هایی که تشخیص گفتار ندارند). */
+    fun onTextSubmitted(text: String) {
+        if (text.isBlank()) return
+        logEvent("ورودی متنی: $text")
+        onUserUtterance(text)
+    }
+
     private fun startListeningTurn() {
+        if (!stt.isAvailable()) {
+            val message = "سرویس تشخیص گفتار روی این گوشی در دسترس نیست."
+            logEvent(message)
+            speak(message) { _state.value = UiState.ErrorState(message) }
+            return
+        }
         _state.value = UiState.Listening
+        logEvent("شروع شنیدن…")
         stt.startListening(
-            onResult = { text -> onUserUtterance(text) },
+            onResult = { text ->
+                logEvent("شنیده شد: $text")
+                onUserUtterance(text)
+            },
             onError = { error -> onSttError(error) }
         )
     }
@@ -76,7 +116,9 @@ class ConversationViewModel(
             SttError.NETWORK_OR_SERVICE_UNAVAILABLE -> "سرویس تشخیص گفتار در دسترس نیست."
             SttError.UNKNOWN -> "مشکلی در شنیدن صدا پیش آمد."
         }
-        speak(message) { _state.value = UiState.Idle }
+        logEvent("خطای شنیدن: $error")
+        // پیام روی صفحه باقی می‌ماند تا اگر صدا کار نکند هم کاربر متوجه شود.
+        speak(message) { _state.value = UiState.ErrorState(message) }
     }
 
     // -------------------- تفسیر جمله بر اساس state فعلی --------------------
@@ -322,12 +364,45 @@ class ConversationViewModel(
         return null
     }
 
+    private var speakWatchdog: Job? = null
+
+    /**
+     * متن را می‌گوید و پس از پایان، [onDone] را اجرا می‌کند.
+     *
+     * نکته مهم: اگر موتور TTS اصلاً پاسخ ندهد (مثلاً روی گوشی نصب نباشد)،
+     * بدون نگهبان زمانی، وضعیت برای همیشه در Speaking گیر می‌کرد و دکمه
+     * میکروفون غیرفعال می‌ماند — یعنی «اپ هیچ کاری نمی‌کند». این watchdog
+     * تضمین می‌کند که مکالمه در هر شرایطی ادامه پیدا کند.
+     */
     private fun speak(text: String, onDone: () -> Unit) {
         _state.value = UiState.Speaking(text)
+        logEvent("گفتن: $text")
+
+        val finished = AtomicBoolean(false)
+        val finish: () -> Unit = {
+            if (finished.compareAndSet(false, true)) onDone()
+        }
+
+        speakWatchdog?.cancel()
+        speakWatchdog = viewModelScope.launch {
+            delay(8_000)
+            if (!finished.get()) {
+                logEvent("هشدار: موتور صدا پاسخی نداد؛ بدون صدا ادامه می‌دهیم.")
+                finish()
+            }
+        }
+
         tts.speak(
             text = text,
-            onDone = onDone,
-            onError = { onDone() }
+            onDone = {
+                speakWatchdog?.cancel()
+                finish()
+            },
+            onError = {
+                speakWatchdog?.cancel()
+                logEvent("خطای پخش صدا (TTS).")
+                finish()
+            }
         )
     }
 

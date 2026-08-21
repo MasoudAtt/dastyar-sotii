@@ -18,6 +18,26 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
+        بسیار مهم (اندروید ۱۱ به بالا / targetSdk >= 30):
+        به‌دلیل «Package Visibility»، اپ به‌صورت پیش‌فرض حتی نمی‌تواند ببیند که
+        روی گوشی سرویس تشخیص گفتار یا موتور تبدیل متن به گفتار نصب است یا نه.
+        بدون این بخش، SpeechRecognizer.isRecognitionAvailable() همیشه false
+        برمی‌گرداند و TTS هم موتوری پیدا نمی‌کند — یعنی دکمه میکروفون ظاهراً
+        هیچ کاری نمی‌کند.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
+    <!--
         این نسخه اول عمداً بدون آیکون سفارشی است (تا فایل‌های کمتری برای
         ساخت دستی لازم باشد) — اندروید از یک آیکون پیش‌فرض سیستمی استفاده
         می‌کند. آیکون سفارشی در فاز بعد اضافه می‌شود.
