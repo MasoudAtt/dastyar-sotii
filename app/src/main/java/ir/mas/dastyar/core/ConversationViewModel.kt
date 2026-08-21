@@ -10,6 +10,7 @@ import ir.mas.dastyar.contacts.Contact
 import ir.mas.dastyar.contacts.ContactLookupResult
 import ir.mas.dastyar.contacts.ContactsResolver
 import ir.mas.dastyar.intent.LlmProvider
+import ir.mas.dastyar.intent.PersianText
 import ir.mas.dastyar.intent.ParsedIntent
 import ir.mas.dastyar.intent.SmsNavigationCommand
 import ir.mas.dastyar.sms.SmsNavigationController
@@ -83,6 +84,60 @@ class ConversationViewModel(
             _ttsPersian.value = tts.supportsPersian()
             logEvent(tts.statusDescription())
         }
+
+        startSafetyNet()
+    }
+
+    // -------------------- تور ایمنی: اپ هرگز نباید گیر کند --------------------
+
+    private var stateSequence = 0L
+    private var safetyJob: Job? = null
+
+    /**
+     * چون کاربر تنهاست و کسی نیست که اپ را «تکان بدهد»، هیچ حالتی نباید
+     * بی‌نهایت دوام بیاورد. هر بار که وضعیت عوض می‌شود یک زمان‌سنج تنظیم
+     * می‌شود؛ اگر تا پایان آن مهلت هیچ پیشرفتی نشده باشد، اپ به‌زور به همان
+     * حالت اولِ «آماده گوش‌دادن هستم» برمی‌گردد.
+     */
+    private fun startSafetyNet() {
+        viewModelScope.launch {
+            state.collect { current ->
+                stateSequence++
+                val sequenceAtStart = stateSequence
+                safetyJob?.cancel()
+
+                if (current is UiState.Idle) return@collect
+
+                val timeoutMillis = when (current) {
+                    // مهلت خواندن متن، متناسب با طول آن (به‌علاوه حاشیه اطمینان).
+                    is UiState.Speaking ->
+                        (15_000L + current.text.length * 120L).coerceAtMost(240_000L)
+                    is UiState.Listening -> 30_000L
+                    is UiState.Thinking -> 20_000L
+                    // حالت‌های «منتظر پاسخ کاربر»: مهلت سخاوتمندانه.
+                    else -> 120_000L
+                }
+
+                safetyJob = viewModelScope.launch {
+                    delay(timeoutMillis)
+                    if (stateSequence == sequenceAtStart) {
+                        logEvent("بازیابی خودکار: وضعیت گیر کرده بود، بازگشت به حالت آماده.")
+                        forceResetToIdle()
+                    }
+                }
+            }
+        }
+    }
+
+    /** همه چیز را متوقف و پاک می‌کند و به حالت اولیه برمی‌گردد. */
+    private fun forceResetToIdle() {
+        runCatching { tts.stop() }
+        runCatching { stt.stopListening() }
+        speakWatchdog?.cancel()
+        pendingSpeechFinish = null
+        smsController = null
+        lastMeaningfulState = UiState.Idle
+        _state.value = UiState.Idle
     }
 
     /** وضعیت موتورها را می‌خواند و در گزارش می‌نویسد. */
@@ -181,10 +236,12 @@ class ConversationViewModel(
 
     private fun handleFreshIntent(text: String) {
         viewModelScope.launch {
-            val intent = llm.classify(text)
+            val intent = runCatching { llm.classify(text) }
+                .getOrElse { ParsedIntent.Invalid("خطای داخلی در تشخیص") }
             logEvent(
                 "تشخیص: " + when (intent) {
                     is ParsedIntent.CallContact -> "تماس با «${intent.contactName}»"
+                    is ParsedIntent.CallNumber -> "تماس با شماره ${intent.digits}"
                     is ParsedIntent.ReadSms -> "خواندن پیامک‌ها"
                     is ParsedIntent.Chat -> "گفتگوی ساده"
                     is ParsedIntent.Invalid -> "نامعتبر (${intent.reason})"
@@ -192,6 +249,7 @@ class ConversationViewModel(
             )
             when (intent) {
                 is ParsedIntent.CallContact -> startCallFlow(intent.contactName)
+                is ParsedIntent.CallNumber -> startNumberCallFlow(intent.digits)
                 is ParsedIntent.ReadSms -> startReadSmsFlow()
                 is ParsedIntent.Chat -> {
                     val reply = intent.reply ?: "بله؟"
@@ -211,6 +269,25 @@ class ConversationViewModel(
     }
 
     // -------------------- CALL_CONTACT --------------------
+
+    /**
+     * کاربر خودِ شماره را گفته است. پیش از تماس، شماره رقم‌به‌رقم دوباره
+     * خوانده می‌شود تا اگر موتور تشخیص گفتار رقمی را اشتباه شنیده باشد،
+     * کاربر متوجه شود و «خیر» بگوید.
+     */
+    private fun startNumberCallFlow(number: String) {
+        logEvent("شماره مستقیم تشخیص داده شد: $number")
+        val spelled = PersianText.spellDigits(number)
+        speak("شماره‌ای که شنیدم این است: $spelled. تماس بگیرم؟") {
+            rememberState(
+                UiState.AwaitingCallConfirmation(
+                    contactName = number,
+                    phoneNumber = number,
+                    isRawNumber = true
+                )
+            )
+        }
+    }
 
     private fun startCallFlow(contactName: String) {
         val result = contactsResolver.findByName(contactName)
@@ -255,7 +332,7 @@ class ConversationViewModel(
             isAffirmative(text) -> {
                 when (callManager.placeCall(pending.phoneNumber)) {
                     CallResult.Placed -> {
-                        rememberState(UiState.InfoMessage("در حال تماس با ${pending.contactName}"))
+                        rememberState(UiState.InfoMessage("در حال تماس با ${confirmationLabel(pending)}"))
                         // پس از برقراری تماس، مکالمه به حالت آماده برمی‌گردد.
                         lastMeaningfulState = UiState.Idle
                         _state.value = UiState.Idle
@@ -281,12 +358,17 @@ class ConversationViewModel(
                 }
             }
             else -> {
-                speak("متوجه نشدم. برای تماس با ${pending.contactName} بگویید «بله» یا «خیر».") {
+                speak("متوجه نشدم. برای تماس با ${confirmationLabel(pending)} بگویید «بله» یا «خیر».") {
                     _state.value = pending
                 }
             }
         }
     }
+
+    /** برای شماره خام، رقم‌به‌رقم؛ برای مخاطب، نام او. */
+    private fun confirmationLabel(pending: UiState.AwaitingCallConfirmation): String =
+        if (pending.isRawNumber) PersianText.spellDigits(pending.phoneNumber)
+        else pending.contactName
 
     private fun handleContactChoiceAnswer(text: String, pending: UiState.AwaitingContactChoice) {
         val chosen = resolveOrdinalChoice(text, pending.candidates)
@@ -309,10 +391,19 @@ class ConversationViewModel(
         }
     }
 
+
+    /**
+     * نام فرستنده پیامک برای خواندن با صدا.
+     * فرستنده ناشناس یک شماره است و باید رقم‌به‌رقم خوانده شود، وگرنه موتور
+     * گفتار آن را مثل یک عدد بزرگ می‌خواند و قابل فهم نیست.
+     */
+    private fun senderForSpeech(sender: String): String =
+        if (PersianText.looksLikePhoneNumber(sender)) PersianText.spellDigits(sender) else sender
+
     // -------------------- READ_SMS --------------------
 
     private fun startReadSmsFlow() {
-        val messages = smsReader.loadRecentMessages()
+        val messages = runCatching { smsReader.loadRecentMessages() }.getOrDefault(emptyList())
         logEvent("پیامک‌های خوانده‌شده از صندوق ورودی: ${messages.size}")
         val controller = SmsNavigationController(messages)
         smsController = controller
@@ -326,7 +417,7 @@ class ConversationViewModel(
         }
 
         val first = controller.first()!!
-        val intro = "${messages.size} پیام دارید. پیام اول از ${first.sender}: ${first.body}"
+        val intro = "${messages.size} پیام دارید. پیام اول از ${senderForSpeech(first.sender)}: ${first.body}"
         speak(intro) {
             rememberState(UiState.ReadingSms(first, controller.currentPosition, controller.total))
         }
@@ -345,7 +436,7 @@ class ConversationViewModel(
                 if (next == null) {
                     speak("پیام بعدی وجود ندارد.") { _state.value = lastMeaningfulState }
                 } else {
-                    speak("پیام از ${next.sender}: ${next.body}") {
+                    speak("پیام از ${senderForSpeech(next.sender)}: ${next.body}") {
                         rememberState(UiState.ReadingSms(next, controller.currentPosition, controller.total))
                     }
                 }
@@ -355,7 +446,7 @@ class ConversationViewModel(
                 if (prev == null) {
                     speak("پیام قبلی وجود ندارد.") { _state.value = lastMeaningfulState }
                 } else {
-                    speak("پیام از ${prev.sender}: ${prev.body}") {
+                    speak("پیام از ${senderForSpeech(prev.sender)}: ${prev.body}") {
                         rememberState(UiState.ReadingSms(prev, controller.currentPosition, controller.total))
                     }
                 }
@@ -365,7 +456,7 @@ class ConversationViewModel(
                 if (current == null) {
                     _state.value = lastMeaningfulState
                 } else {
-                    speak("پیام از ${current.sender}: ${current.body}") {
+                    speak("پیام از ${senderForSpeech(current.sender)}: ${current.body}") {
                         _state.value = lastMeaningfulState
                     }
                 }

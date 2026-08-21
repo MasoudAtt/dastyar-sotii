@@ -9,10 +9,14 @@ android {
 
     defaultConfig {
         applicationId = "ir.mas.dastyar"
-        minSdk = 26
+        // اندروید ۶.۰ — پایین‌ترین سطحی که منطقی است:
+        //  • مجوزهای زمان‌اجرا (runtime permissions) از همین API معرفی شدند و
+        //    کل منطق PermissionsGate بر آن استوار است.
+        //  • موتور گفتار eSpeak NG هم دقیقاً از اندروید ۶.۰ به بالا کار می‌کند.
+        minSdk = 23
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.4.0-debug"
+        versionCode = 6
+        versionName = "0.5.0-debug"
 
         vectorDrawables {
             useSupportLibrary = true

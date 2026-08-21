@@ -20,7 +20,9 @@ sealed class UiState {
 
     data class AwaitingCallConfirmation(
         val contactName: String,
-        val phoneNumber: String
+        val phoneNumber: String,
+        /** اگر true باشد، کاربر خودِ شماره را گفته و باید رقم‌به‌رقم تأیید شود. */
+        val isRawNumber: Boolean = false
     ) : UiState()
 
     data class AwaitingContactChoice(

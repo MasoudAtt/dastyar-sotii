@@ -4,6 +4,8 @@ import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -75,7 +77,7 @@ fun MainScreen(viewModel: ConversationViewModel) {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
+                .padding(horizontal = 16.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(modifier = Modifier.height(24.dp))
@@ -185,9 +187,13 @@ private fun MicButton(state: UiState, onClick: () -> Unit) {
         else -> stringResource(R.string.mic_button_desc_idle)
     }
 
+    // دکمه عمداً تا کل عرض صفحه بزرگ شده است: کاربر کم‌بینا باید بتواند بدون
+    // نگاه‌کردن و بدون دقت، هر جایی از بالای صفحه را لمس کند و کار کند.
     Box(
         modifier = Modifier
-            .size(180.dp)
+            .fillMaxWidth()
+            .widthIn(max = 420.dp)
+            .aspectRatio(1f)
             .clip(CircleShape)
             .background(
                 if (isListening) MaterialTheme.colorScheme.error
@@ -201,7 +207,7 @@ private fun MicButton(state: UiState, onClick: () -> Unit) {
             imageVector = if (isListening) Icons.Filled.MicOff else Icons.Filled.Mic,
             contentDescription = null, // توضیح روی خود Box گذاشته شده تا TalkBack یک‌بار اعلام کند
             tint = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.size(84.dp)
+            modifier = Modifier.size(120.dp)
         )
     }
 }
@@ -213,7 +219,8 @@ private fun statusText(state: UiState): String = when (state) {
     is UiState.Thinking -> stringResource(R.string.mic_button_thinking)
     is UiState.Speaking -> state.text
     is UiState.AwaitingCallConfirmation ->
-        "تماس با ${state.contactName}؟ بگویید بله یا خیر."
+        if (state.isRawNumber) "تماس با شماره ${state.phoneNumber}؟ بگویید بله یا خیر."
+        else "تماس با ${state.contactName}؟ بگویید بله یا خیر."
     is UiState.AwaitingContactChoice -> "کدام مخاطب؟"
     is UiState.ReadingSms -> "پیام ${state.index} از ${state.total}: ${state.message.body}"
     is UiState.InfoMessage -> state.text

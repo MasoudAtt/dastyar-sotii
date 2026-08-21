@@ -13,6 +13,9 @@ sealed class ParsedIntent {
     /** درخواست تماس با یک مخاطب؛ contactName خام از گفتار کاربر استخراج شده است. */
     data class CallContact(val contactName: String) : ParsedIntent()
 
+    /** درخواست تماس با شماره‌ای که کاربر مستقیماً گفته است (بدون نیاز به مخاطب). */
+    data class CallNumber(val digits: String) : ParsedIntent()
+
     /** درخواست خواندن پیامک‌های دریافتی. */
     data object ReadSms : ParsedIntent()
 
@@ -38,7 +41,20 @@ enum class SmsNavigationCommand {
 object PersianText {
 
     fun normalize(input: String): String {
-        return input
+        // ارقام فارسی/عربی به ارقام لاتین، تا استخراج شماره تلفن یکدست شود.
+        val withLatinDigits = buildString {
+            for (ch in input) {
+                append(
+                    when (ch) {
+                        in '۰'..'۹' -> '0' + (ch - '۰')
+                        in '٠'..'٩' -> '0' + (ch - '٠')
+                        else -> ch
+                    }
+                )
+            }
+        }
+
+        return withLatinDigits
             .trim()
             .replace('‌', ' ')      // نیم‌فاصله -> فاصله
             .replace('ي', 'ی') // ي عربی -> ی فارسی
@@ -55,6 +71,37 @@ object PersianText {
             .replace('ة', 'ه') // ة -> ه
             .replace(Regex("\\s"), "")
             .lowercase()
+    }
+
+    private val digitNames = mapOf(
+        '0' to "صفر", '1' to "یک", '2' to "دو", '3' to "سه", '4' to "چهار",
+        '5' to "پنج", '6' to "شش", '7' to "هفت", '8' to "هشت", '9' to "نه"
+    )
+
+    /**
+     * یک شماره را رقم‌به‌رقم و با نام فارسی هر رقم برمی‌گرداند.
+     *
+     * چرا لازم است: موتور گفتار «۰۹۱۲» را «نهصد و دوازده» می‌خواند که برای
+     * شنیدن و یادداشت‌کردن یک شماره تلفن بی‌فایده است. با جدا کردن ارقام
+     * («صفر، نه، یک، دو») کاربر دقیقاً می‌شنود چه شماره‌ای است.
+     */
+    fun spellDigits(raw: String): String {
+        return raw.mapNotNull { ch ->
+            when {
+                ch.isDigit() -> digitNames[ch]
+                ch == '+' -> "به علاوه"
+                else -> null
+            }
+        }.joinToString("، ")
+    }
+
+    /** آیا این رشته یک شماره تلفن است (نه نام یک فرستنده)؟ */
+    fun looksLikePhoneNumber(value: String): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return false
+        val digitCount = trimmed.count { it.isDigit() }
+        if (digitCount < 3) return false
+        return trimmed.all { it.isDigit() || it in "+-() " }
     }
 }
 
@@ -111,7 +158,13 @@ class RuleBasedLlmProvider : LlmProvider {
             return ParsedIntent.Chat("فعلاً فقط می‌توانم پیامک‌های دریافتی را بخوانم؛ توانایی فرستادن پیامک را ندارم.")
         }
 
-        // ۲) تماس (حساس‌ترین عملیات)
+        // ۲) شماره‌ای که کاربر مستقیماً گفته است (پیش از جست‌وجوی نام بررسی
+        //    می‌شود، چون شماره در الگوی نام هرگز نمی‌گنجد).
+        extractDialableNumber(text)?.let { number ->
+            return ParsedIntent.CallNumber(number)
+        }
+
+        // ۳) تماس با مخاطب (حساس‌ترین عملیات)
         extractCallContactName(text)?.let { name ->
             return ParsedIntent.CallContact(name)
         }
@@ -122,6 +175,38 @@ class RuleBasedLlmProvider : LlmProvider {
         }
 
         return ParsedIntent.Chat(reply = cannedReply(text))
+    }
+
+    // -------------------- CALL_NUMBER (شماره مستقیم) --------------------
+
+    /** واژه‌های تک‌رقمی، برای وقتی کاربر شماره را رقم‌به‌رقم می‌گوید. */
+    private val digitWords = mapOf(
+        "صفر" to "0", "یک" to "1", "دو" to "2", "سه" to "3", "چهار" to "4",
+        "پنج" to "5", "شش" to "6", "شیش" to "6", "هفت" to "7", "هشت" to "8", "نه" to "9"
+    )
+
+    /** نشانه‌های اینکه جمله درباره تماس گرفتن است. */
+    private val callVerbHint = Regex("زنگ|تماس|بگیر|شماره|تلفن")
+
+    /**
+     * شماره قابل شماره‌گیری را از جمله بیرون می‌کشد.
+     *
+     * سخت‌گیری عمدی: یا باید نشانه صریح تماس در جمله باشد («شماره … را بگیر»)،
+     * یا رشته ارقام آن‌قدر بلند باشد که جز شماره تلفن چیز دیگری نتواند باشد.
+     * در نهایت هم هیچ تماسی بدون تأیید صوتی کاربر برقرار نمی‌شود.
+     */
+    private fun extractDialableNumber(text: String): String? {
+        val converted = text.split(" ").joinToString(" ") { token ->
+            digitWords[token] ?: token
+        }
+        val digits = converted.filter { it.isDigit() }
+        if (digits.length < 3) return null
+
+        val hasCallHint = callVerbHint.containsMatchIn(text)
+        val longEnoughToBeAPhoneNumber = digits.length >= 7
+        if (!hasCallHint && !longEnoughToBeAPhoneNumber) return null
+
+        return if (converted.contains('+')) "+$digits" else digits
     }
 
     // -------------------- CALL_CONTACT --------------------
