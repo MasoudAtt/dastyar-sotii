@@ -99,8 +99,16 @@ class ConversationViewModel(
             is UiState.Listening -> {
                 stt.stopListening()
             }
-            is UiState.Thinking, is UiState.Speaking -> {
-                // در حین پردازش/پاسخ، دکمه میکروفون نادیده گرفته می‌شود.
+            is UiState.Speaking -> {
+                // دکمه میکروفون همیشه باید کار کند: خواندن طولانی یک پیامک
+                // نباید کاربر را زندانی کند. صدا قطع می‌شود، ولی مرحله بعدی
+                // مکالمه (مثلاً «منتظر بله/خیر») از دست نمی‌رود.
+                logEvent("پخش صدا با فشردن دکمه قطع شد.")
+                stopSpeakingAndSettle()
+                startListeningTurn()
+            }
+            is UiState.Thinking -> {
+                // در حین پردازش، دکمه نادیده گرفته می‌شود (خیلی کوتاه است).
             }
             else -> startListeningTurn()
         }
@@ -370,20 +378,13 @@ class ConversationViewModel(
                 }
             }
             SmsNavigationCommand.UNKNOWN -> {
-                // کاربر نباید داخل حالت خواندن پیامک گیر بیفتد: اگر جمله‌اش
-                // در واقع یک دستور تماس است، همان را اجرا می‌کنیم.
-                viewModelScope.launch {
-                    val intent = llm.classify(text)
-                    if (intent is ParsedIntent.CallContact) {
-                        logEvent("در حین خواندن پیامک، دستور تماس تشخیص داده شد.")
-                        smsController = null
-                        startCallFlow(intent.contactName)
-                    } else {
-                        speak("برای پیمایش پیام‌ها بگویید «بعدی»، «قبلی»، «دوباره بخوان» یا «متوقف شو».") {
-                            _state.value = lastMeaningfulState
-                        }
-                    }
-                }
+                // کاربر هرگز نباید داخل حالت خواندن پیامک زندانی شود: هر جمله‌ای
+                // که دستور ناوبری نباشد، به‌عنوان یک دستور کاملاً جدید بررسی
+                // می‌شود (تماس، خواندن دوباره، یا گفتگوی ساده).
+                logEvent("دستور ناوبری نبود؛ به‌عنوان دستور جدید بررسی می‌شود.")
+                smsController = null
+                lastMeaningfulState = UiState.Idle
+                handleFreshIntent(text)
             }
         }
     }
@@ -419,6 +420,20 @@ class ConversationViewModel(
     }
 
     private var speakWatchdog: Job? = null
+    private var pendingSpeechFinish: (() -> Unit)? = null
+
+    /**
+     * پخش صدا را قطع می‌کند ولی مرحله بعدی مکالمه را همان‌جا انجام می‌دهد،
+     * تا context از دست نرود (مثلاً اگر وسط پرسیدن «تماس بگیرم؟» قطع شود،
+     * اپ همچنان منتظر «بله/خیر» می‌ماند).
+     */
+    private fun stopSpeakingAndSettle() {
+        speakWatchdog?.cancel()
+        runCatching { tts.stop() }
+        val pending = pendingSpeechFinish
+        pendingSpeechFinish = null
+        pending?.invoke()
+    }
 
     /**
      * متن را می‌گوید و پس از پایان، [onDone] را اجرا می‌کند.
@@ -430,16 +445,21 @@ class ConversationViewModel(
      */
     private fun speak(text: String, onDone: () -> Unit) {
         _state.value = UiState.Speaking(text)
-        logEvent("گفتن: $text")
+        logEvent("گفتن: " + text.take(40) + if (text.length > 40) "…" else "")
 
         val finished = AtomicBoolean(false)
         val finish: () -> Unit = {
             if (finished.compareAndSet(false, true)) onDone()
         }
+        pendingSpeechFinish = finish
+
+        // مهلت باید متناسب با طول متن باشد: خواندن یک پیامک بلند می‌تواند
+        // بیش از یک دقیقه طول بکشد و مهلت ثابت کوتاه، وسط خواندن قطعش می‌کرد.
+        val timeoutMillis = (6_000L + text.length * 90L).coerceAtMost(180_000L)
 
         speakWatchdog?.cancel()
         speakWatchdog = viewModelScope.launch {
-            delay(8_000)
+            delay(timeoutMillis)
             if (!finished.get()) {
                 logEvent("هشدار: موتور صدا پاسخی نداد؛ بدون صدا ادامه می‌دهیم.")
                 finish()

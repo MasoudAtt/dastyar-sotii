@@ -175,10 +175,13 @@ fun MainScreen(viewModel: ConversationViewModel) {
 @Composable
 private fun MicButton(state: UiState, onClick: () -> Unit) {
     val isListening = state is UiState.Listening
-    val enabled = state !is UiState.Thinking && state !is UiState.Speaking
+    // در حالت Speaking هم باید فعال باشد: فشردن دکمه، خواندن را قطع می‌کند.
+    val enabled = state !is UiState.Thinking
 
     val description = when {
         isListening -> stringResource(R.string.mic_button_desc_listening)
+        state is UiState.Speaking ->
+            "در حال خواندن. برای قطع کردن و گفتن دستور جدید، دو بار ضربه بزنید."
         else -> stringResource(R.string.mic_button_desc_idle)
     }
 
