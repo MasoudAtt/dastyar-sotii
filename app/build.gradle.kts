@@ -15,8 +15,8 @@ android {
         //  • موتور گفتار eSpeak NG هم دقیقاً از اندروید ۶.۰ به بالا کار می‌کند.
         minSdk = 23
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.5.0-debug"
+        versionCode = 7
+        versionName = "0.6.0-debug"
 
         vectorDrawables {
             useSupportLibrary = true

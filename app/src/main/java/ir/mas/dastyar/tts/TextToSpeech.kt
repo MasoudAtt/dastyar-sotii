@@ -29,6 +29,13 @@ interface TextToSpeechProvider {
     /** توضیح کوتاه و قابل‌نمایش از وضعیت موتور، برای عیب‌یابی روی گوشی واقعی. */
     fun statusDescription(): String
 
+    /**
+     * موتورهای نصب‌شده را دوباره از اول بررسی می‌کند.
+     * پس از اینکه کاربر یک موتور صدای فارسی نصب کرد، بدون بستن و باز کردن
+     * دوباره اپ، همین‌جا شناسایی می‌شود.
+     */
+    fun rescan()
+
     fun speak(text: String, onDone: () -> Unit = {}, onError: (() -> Unit)? = null)
 
     fun stop()
@@ -52,15 +59,29 @@ class AndroidSystemTtsProvider(context: Context) : TextToSpeechProvider {
     private var fallbackAttempted = false
 
     init {
-        installedEngines = runCatching {
-            appContext.packageManager
-                .queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
-                .mapNotNull { it.serviceInfo?.packageName }
-                .distinct()
-        }.getOrDefault(emptyList())
+        beginProbe()
+    }
 
+    private fun queryInstalledEngines(): List<String> = runCatching {
+        appContext.packageManager
+            .queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+            .mapNotNull { it.serviceInfo?.packageName }
+            .distinct()
+    }.getOrDefault(emptyList())
+
+    private fun beginProbe() {
+        probeFinished = false
+        persianSupported = false
+        fallbackAttempted = false
+        candidateIndex = -1
+        activeEngine = "نامشخص"
+        installedEngines = queryInstalledEngines()
         candidates = listOf("") + installedEngines
         probeNext()
+    }
+
+    override fun rescan() {
+        beginProbe()
     }
 
     // -------------------- پیدا کردن موتوری که فارسی بلد باشد --------------------

@@ -82,31 +82,16 @@ fun MainScreen(viewModel: ConversationViewModel) {
         ) {
             Spacer(modifier = Modifier.height(24.dp))
 
-            // هشدار حیاتی: بدون موتور صدای فارسی، اپ کاملاً بی‌صدا است و
-            // کاربر نابینا هیچ بازخوردی نمی‌گیرد.
+            // بدون موتور صدای فارسی، اپ کاملاً بی‌صدا است و کاربر نابینا
+            // هیچ بازخوردی نمی‌گیرد — پس راه‌اندازی باید تا حد ممکن ساده شود.
             if (ttsPersian == false) {
-                Text(
-                    text = "روی این گوشی هیچ موتور صدای فارسی نصب نیست، برای همین اپ " +
-                        "نمی‌تواند حرف بزند. یک موتور گفتار با پشتیبانی فارسی " +
-                        "(مثل «eSpeak NG») نصب کنید و در تنظیمات، آن را به‌عنوان " +
-                        "موتور پیش‌فرض انتخاب کنید.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Button(
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent("com.android.settings.TTS_SETTINGS")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }
+                VoiceSetupCard(
+                    onDownload = {
+                        openUrl(context, "https://f-droid.org/repo/com.reecedunn.espeak_22.apk")
                     },
-                    modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
-                ) {
-                    Text(text = "باز کردن تنظیمات گفتار", style = MaterialTheme.typography.labelLarge)
-                }
+                    onOpenSettings = { openTtsSettings(context) },
+                    onRecheck = { viewModel.rescanVoices() }
+                )
             }
 
             MicButton(
@@ -146,6 +131,13 @@ fun MainScreen(viewModel: ConversationViewModel) {
                 modifier = Modifier.padding(top = 12.dp)
             ) {
                 Text(text = "اجرا کن", style = MaterialTheme.typography.labelLarge)
+            }
+
+            Button(
+                onClick = { viewModel.speakTest() },
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                Text(text = "تست صدا", style = MaterialTheme.typography.labelLarge)
             }
 
             Spacer(modifier = Modifier.height(32.dp))
@@ -225,4 +217,89 @@ private fun statusText(state: UiState): String = when (state) {
     is UiState.ReadingSms -> "پیام ${state.index} از ${state.total}: ${state.message.body}"
     is UiState.InfoMessage -> state.text
     is UiState.ErrorState -> state.text
+}
+
+/**
+ * راهنمای گام‌به‌گام نصب موتور صدای فارسی.
+ *
+ * چرا موتور صدا داخل خود اپ گنجانده نشده: صفحه‌خوان اندروید (TalkBack) هم
+ * برای فارسی حرف‌زدن به همین موتور نیاز دارد و یک موتور جاسازی‌شده داخل اپ
+ * برای TalkBack نامرئی است. نصب یک‌بارهٔ موتور، هم این اپ و هم کل گوشی را
+ * فارسی‌گو می‌کند.
+ */
+@Composable
+private fun VoiceSetupCard(
+    onDownload: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onRecheck: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "راه‌اندازی صدای فارسی",
+            style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            text = "روی این گوشی هیچ موتور صدای فارسی نصب نیست، برای همین اپ " +
+                "نمی‌تواند حرف بزند. سه قدم زیر را به‌ترتیب انجام دهید (یک‌بار برای همیشه).",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp, bottom = 12.dp)
+        )
+
+        Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "۱ — دانلود و نصب موتور صدا", style = MaterialTheme.typography.labelLarge)
+        }
+        Button(
+            onClick = onOpenSettings,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+        ) {
+            Text(
+                text = "۲ — انتخاب آن به‌عنوان موتور پیش‌فرض",
+                style = MaterialTheme.typography.labelLarge
+            )
+        }
+        Button(
+            onClick = onRecheck,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+        ) {
+            Text(text = "۳ — بررسی دوباره و تست صدا", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+private fun openUrl(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
+
+private fun openTtsSettings(context: android.content.Context) {
+    runCatching {
+        context.startActivity(
+            Intent("com.android.settings.TTS_SETTINGS")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        runCatching {
+            context.startActivity(
+                Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
 }

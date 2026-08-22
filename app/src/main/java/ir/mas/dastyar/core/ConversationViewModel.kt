@@ -72,8 +72,16 @@ class ConversationViewModel(
     val ttsPersian: StateFlow<Boolean?> = _ttsPersian.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            repeat(20) {
+        watchTtsReadiness()
+        startSafetyNet()
+    }
+
+    private var ttsWatchJob: Job? = null
+
+    private fun watchTtsReadiness() {
+        ttsWatchJob?.cancel()
+        ttsWatchJob = viewModelScope.launch {
+            repeat(25) {
                 if (tts.isAvailable()) {
                     _ttsPersian.value = tts.supportsPersian()
                     logEvent(tts.statusDescription())
@@ -84,8 +92,30 @@ class ConversationViewModel(
             _ttsPersian.value = tts.supportsPersian()
             logEvent(tts.statusDescription())
         }
+    }
 
-        startSafetyNet()
+    /**
+     * پس از نصب یک موتور صدای جدید، بدون بستن اپ دوباره همه موتورها بررسی
+     * می‌شوند و اگر فارسی پیدا شود، بلافاصله یک جمله آزمایشی گفته می‌شود.
+     */
+    fun rescanVoices() {
+        logEvent("بررسی دوباره موتورهای صدا…")
+        _ttsPersian.value = null
+        runCatching { tts.rescan() }
+        watchTtsReadiness()
+        viewModelScope.launch {
+            delay(1_500)
+            speakTest()
+        }
+    }
+
+    /** یک جمله آزمایشی می‌گوید تا صدا روی گوشی واقعی بررسی شود. */
+    fun speakTest() {
+        if (_state.value !is UiState.Idle) return
+        speak("صدای فارسی درست کار می‌کند. من آماده‌ام.") {
+            lastMeaningfulState = UiState.Idle
+            _state.value = UiState.Idle
+        }
     }
 
     // -------------------- تور ایمنی: اپ هرگز نباید گیر کند --------------------
