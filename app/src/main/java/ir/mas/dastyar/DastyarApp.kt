@@ -12,6 +12,8 @@ import ir.mas.dastyar.intent.LlmProvider
 import ir.mas.dastyar.intent.RuleBasedLlmProvider
 import ir.mas.dastyar.sms.SmsReader
 import ir.mas.dastyar.stt.AndroidSystemSttProvider
+import ir.mas.dastyar.stt.FallbackSttProvider
+import ir.mas.dastyar.stt.VoskSttProvider
 import ir.mas.dastyar.stt.SpeechToTextProvider
 import ir.mas.dastyar.tts.AndroidSystemTtsProvider
 import ir.mas.dastyar.tts.TextToSpeechProvider
@@ -50,7 +52,11 @@ class DastyarApp : Application() {
         super.onCreate()
         startedAtMillis = System.currentTimeMillis()
 
-        sttProvider = AndroidSystemSttProvider(this)
+        // اول موتور آفلاین Vosk؛ موتور ابری اندروید فقط پشتیبان است.
+        sttProvider = FallbackSttProvider(
+            primary = VoskSttProvider(this),
+            secondary = AndroidSystemSttProvider(this)
+        )
         ttsProvider = AndroidSystemTtsProvider(this)
         llmProvider = RuleBasedLlmProvider()
         contactsResolver = ContactsResolver(this)

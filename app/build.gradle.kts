@@ -15,12 +15,25 @@ android {
         //  • موتور گفتار eSpeak NG هم دقیقاً از اندروید ۶.۰ به بالا کار می‌کند.
         minSdk = 23
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.6.0-debug"
+        versionCode = 8
+        versionName = "0.7.0-offline"
 
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // فقط دو معماری رایج، تا کتابخانه نیتیو Vosk حجم اپ را چند برابر نکند.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // فایل‌های مدل تشخیص گفتار نباید دوباره فشرده شوند؛ باز کردنشان
+    // هنگام اولین اجرا این‌طور سریع‌تر و مطمئن‌تر است.
+    androidResources {
+        noCompress.addAll(
+            listOf("mdl", "conf", "fst", "int", "ie", "txt", "dubm", "dic", "carpa", "vec", "mat")
+        )
     }
 
     buildTypes {
@@ -70,4 +83,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // تشخیص گفتار آفلاین
+    implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
 }

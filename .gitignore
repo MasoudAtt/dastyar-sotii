@@ -11,3 +11,6 @@ local.properties
 /app/build
 /app/release
 *.hprof
+
+# مدل تشخیص گفتار هنگام build دانلود می‌شود، در ریپو نگه داشته نمی‌شود
+/app/src/main/assets/model-fa/
