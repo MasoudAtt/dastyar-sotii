@@ -69,6 +69,16 @@ class VoskSttProvider(private val context: Context) : SpeechToTextProvider {
         val marker = File(target, MARKER)
         if (marker.exists()) return target
 
+        // بررسی صریح پیش از شروع کپی: اگر مدل اصلاً داخل اپ نباشد، پیام خطا
+        // باید همین را بگوید، نه یک FileNotFoundException مبهم.
+        val modelEntries = runCatching { context.assets.list(MODEL_ASSET) }.getOrNull()
+        if (modelEntries.isNullOrEmpty()) {
+            val topLevel = runCatching { context.assets.list("") }.getOrNull().orEmpty()
+            throw IllegalStateException(
+                "پوشه مدل داخل اپ نیست (assets: ${topLevel.joinToString(",").ifBlank { "خالی" }})"
+            )
+        }
+
         if (target.exists()) target.deleteRecursively()
         target.mkdirs()
         copyAsset(MODEL_ASSET, target)
