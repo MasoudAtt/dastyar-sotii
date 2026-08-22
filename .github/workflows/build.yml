@@ -67,13 +67,15 @@ jobs:
           else
             echo "Nothing to commit."
           fi
+
       - name: Prepare build
-              run: |
-                if [ -f scripts/prepare-build.sh ]; then
-                  bash scripts/prepare-build.sh
-                else
-                  echo "no scripts/prepare-build.sh — skipping"
-                fi
+        run: |
+          if [ -f scripts/prepare-build.sh ]; then
+            bash scripts/prepare-build.sh
+          else
+            echo "no scripts/prepare-build.sh — skipping"
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
